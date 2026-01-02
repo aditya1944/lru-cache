@@ -7,8 +7,8 @@ A high-performance, thread-safe, generic LRU (Least Recently Used) cache impleme
 - **Generic Types**: Supports any comparable key type and any value type using Go generics
 - **Thread-Safe**: All operations are protected by `sync.RWMutex` for safe concurrent access
 - **O(1) Operations**: Both `Get` and `Put` operations run in constant time
-- **Statistics Tracking**: Built-in tracking for cache hits, misses, and evictions
-- **Zero Dependencies**: Uses only Go standard library (`container/list`, `sync`, `errors`)
+- **Lock-Free Statistics**: Built-in tracking for cache hits, misses, and evictions using atomic counters
+- **Zero Dependencies**: Uses only Go standard library (`container/list`, `sync`, `sync/atomic`, `errors`)
 
 ## Installation
 
@@ -43,9 +43,8 @@ func main() {
     }
 
     // Check statistics
-    stats := cache.Stats()
-    fmt.Printf("Hits: %d, Misses: %d, Evictions: %d\n",
-        stats.Hits, stats.Misses, stats.Evictions)
+    hits, misses, evictions := cache.Stats()
+    fmt.Printf("Hits: %d, Misses: %d, Evictions: %d\n", hits, misses, evictions)
 }
 ```
 
@@ -182,7 +181,7 @@ Removes all items from the cache and resets all statistics to zero.
 ```go
 cache.Clear()
 // cache.Len() == 0
-// cache.Stats() == Stats{Hits: 0, Misses: 0, Evictions: 0}
+// hits, misses, evictions := cache.Stats() // all return 0
 ```
 
 ---
@@ -190,24 +189,20 @@ cache.Clear()
 ### Stats
 
 ```go
-func (c *cache[K, V]) Stats() Stats
+func (c *cache[K, V]) Stats() (hits uint64, misses uint64, evictions uint64)
 ```
 
-Returns the current cache statistics.
+Returns the current cache statistics. This method is **lock-free** and uses atomic loads, making it safe to call frequently without impacting cache performance.
 
 **Returns:**
-```go
-type Stats struct {
-    Hits      uint  // Number of successful Get operations
-    Misses    uint  // Number of Get operations for non-existent keys
-    Evictions uint  // Number of items evicted due to capacity
-}
-```
+- `hits`: Number of successful `Get` operations
+- `misses`: Number of `Get` operations for non-existent keys
+- `evictions`: Number of items evicted due to capacity
 
 **Example:**
 ```go
-stats := cache.Stats()
-hitRate := float64(stats.Hits) / float64(stats.Hits + stats.Misses) * 100
+hits, misses, evictions := cache.Stats()
+hitRate := float64(hits) / float64(hits + misses) * 100
 fmt.Printf("Hit rate: %.2f%%\n", hitRate)
 ```
 
@@ -255,11 +250,25 @@ The LRU cache uses two complementary data structures:
 
 ### Thread Safety
 
-All public methods acquire appropriate locks:
-- **Write lock** (`Lock`): `Get`, `Put`, `Delete`, `Clear`
-- **Read lock** (`RLock`): `Len`, `Stats`
+The cache uses a hybrid approach for thread safety:
 
-Note: `Get` uses a write lock because it modifies the LRU order.
+**Mutex-protected operations:**
+- **Write lock** (`Lock`): `Get`, `Put`, `Delete`, `Clear`
+- **Read lock** (`RLock`): `Len`
+
+**Lock-free operations (using atomics):**
+- `Stats()` - uses `atomic.Uint64.Load()` for each counter
+
+Note: `Get` uses a write lock because it modifies the LRU order. Statistics counters use `atomic.Uint64` for lock-free increments and reads.
+
+### Why Atomic Counters for Stats?
+
+The statistics counters (`hits`, `misses`, `evictions`) use `sync/atomic` instead of mutex locks for two reasons:
+
+1. **Performance**: Atomic operations are single CPU instructions (~1-5ns) vs mutex lock/unlock (~20-50ns)
+2. **No blocking**: `Stats()` never blocks `Get`/`Put` operations, making it safe for monitoring/metrics collection
+
+The trade-off is that the three counters are not read atomically together - you might get a slightly inconsistent snapshot. For monitoring purposes, this is acceptable.
 
 ## Benchmarks
 
@@ -269,14 +278,14 @@ Benchmarks run on Apple M1 Pro, Go 1.25.5:
 goos: darwin
 goarch: arm64
 cpu: Apple M1 Pro
-BenchmarkPut-10    98,779,692    112.9 ns/op    64 B/op    2 allocs/op
-BenchmarkGet-10   618,788,148     19.42 ns/op    0 B/op    0 allocs/op
+BenchmarkPut-10    100,000,000    115.0 ns/op    64 B/op    2 allocs/op
+BenchmarkGet-10    565,951,308     21.19 ns/op    0 B/op    0 allocs/op
 ```
 
 | Operation | Throughput | Latency | Allocations |
 |-----------|------------|---------|-------------|
-| `Put` | ~8.8M ops/sec | 112.9 ns | 2 allocs (64 B) |
-| `Get` | ~51.5M ops/sec | 19.42 ns | 0 allocs |
+| `Put` | ~8.7M ops/sec | 115.0 ns | 2 allocs (64 B) |
+| `Get` | ~47.2M ops/sec | 21.19 ns | 0 allocs |
 
 ### Running Benchmarks
 
