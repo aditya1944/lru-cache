@@ -39,15 +39,15 @@ func TestCache(t *testing.T) {
 		t.Errorf("expected cache length to be 0, but got : %d", cache.Len())
 	}
 
-	stats := cache.Stats()
-	if stats.Hits != 0 {
-		t.Errorf("expected hits to be 0, but got: %d", stats.Hits)
+	hits, misses, evictions := cache.Stats()
+	if hits != 0 {
+		t.Errorf("expected hits to be 0, but got: %d", hits)
 	}
-	if stats.Misses != 0 {
-		t.Errorf("expected misses to be 0, but got: %d", stats.Misses)
+	if misses != 0 {
+		t.Errorf("expected misses to be 0, but got: %d", misses)
 	}
-	if stats.Evictions != 0 {
-		t.Errorf("expected evictions to be 0, but got: %d", stats.Evictions)
+	if evictions != 0 {
+		t.Errorf("expected evictions to be 0, but got: %d", evictions)
 	}
 }
 
@@ -82,15 +82,15 @@ func TestCacheConcurrency(t *testing.T) {
 
 	wg.Wait()
 
-	stats := cache.Stats()
-	if stats.Hits != 1000 {
-		t.Errorf("expected hits to be 1000, but got: %d", stats.Hits)
+	hits, misses, evictions := cache.Stats()
+	if hits != 1000 {
+		t.Errorf("expected hits to be 1000, but got: %d", hits)
 	}
-	if stats.Misses != 0 {
-		t.Errorf("expected misses to be 0, but got: %d", stats.Misses)
+	if misses != 0 {
+		t.Errorf("expected misses to be 0, but got: %d", misses)
 	}
-	if stats.Evictions != 0 {
-		t.Errorf("expected evictions to be 0, but got: %d", stats.Evictions)
+	if evictions != 0 {
+		t.Errorf("expected evictions to be 0, but got: %d", evictions)
 	}
 }
 
@@ -111,15 +111,15 @@ func TestCacheEviction(t *testing.T) {
 		t.Errorf("key: `key1` should have been evicted, but still exists")
 	}
 
-	stats := cache.Stats()
-	if stats.Hits != 0 {
-		t.Errorf("expected hits to be 0, but got: %d", stats.Hits)
+	hits, misses, evictions := cache.Stats()
+	if hits != 0 {
+		t.Errorf("expected hits to be 0, but got: %d", hits)
 	}
-	if stats.Misses != 1 {
-		t.Errorf("expected misses to be 1, but got: %d", stats.Misses)
+	if misses != 1 {
+		t.Errorf("expected misses to be 1, but got: %d", misses)
 	}
-	if stats.Evictions != 1 {
-		t.Errorf("expected evictions to be 1, but got: %d", stats.Evictions)
+	if evictions != 1 {
+		t.Errorf("expected evictions to be 1, but got: %d", evictions)
 	}
 }
 
@@ -159,15 +159,15 @@ func TestSameKeyInsertion(t *testing.T) {
 		t.Errorf("expected value to be %s, but got: %s", "value1", val)
 	}
 
-	stats := cache.Stats()
-	if stats.Hits != 1 {
-		t.Errorf("expected hits to be 1, but got: %d", stats.Hits)
+	hits, misses, evictions := cache.Stats()
+	if hits != 1 {
+		t.Errorf("expected hits to be 1, but got: %d", hits)
 	}
-	if stats.Misses != 0 {
-		t.Errorf("expected misses to be 0, but got: %d", stats.Misses)
+	if misses != 0 {
+		t.Errorf("expected misses to be 0, but got: %d", misses)
 	}
-	if stats.Evictions != 0 {
-		t.Errorf("expected evictions to be 0, but got: %d", stats.Evictions)
+	if evictions != 0 {
+		t.Errorf("expected evictions to be 0, but got: %d", evictions)
 	}
 }
 
@@ -185,13 +185,37 @@ func TestConcurrentReadWrite(t *testing.T) {
 
 	for i := range 1000 {
 		wg.Go(func() {
-			cache.Put(i,i)
+			cache.Put(i, i)
 		})
 	}
 
 	for i := range 1000 {
 		wg.Go(func() {
 			cache.Get(i)
+		})
+	}
+
+	wg.Wait()
+}
+
+func TestStatsConcurrency(t *testing.T) {
+	cache, _ := New[int, int](100)
+	var wg sync.WaitGroup
+
+	for i := range 1000 {
+		wg.Go(func() {
+			for j := range 100 {
+				cache.Put(i, j)
+				cache.Get(i)
+			}
+		})
+	}
+
+	for range 100 {
+		wg.Go(func() {
+			for range 1000 {
+				_, _, _ = cache.Stats()
+			}
 		})
 	}
 

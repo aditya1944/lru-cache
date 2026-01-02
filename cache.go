@@ -4,12 +4,13 @@ import (
 	"container/list"
 	"errors"
 	"sync"
+	"sync/atomic"
 )
 
-type Stats struct {
-	Hits      uint
-	Misses    uint
-	Evictions uint
+type stats struct {
+	hits      atomic.Uint64
+	misses    atomic.Uint64
+	evictions atomic.Uint64
 }
 
 type container[K comparable, V any] struct {
@@ -25,7 +26,7 @@ type cache[K comparable, V any] struct {
 
 	lock sync.RWMutex
 
-	stats Stats
+	stats stats
 }
 
 func (c *cache[K, V]) Get(key K) (value V, ok bool) {
@@ -35,11 +36,12 @@ func (c *cache[K, V]) Get(key K) (value V, ok bool) {
 	element, ok := c.m[key]
 
 	if !ok {
-		c.stats.Misses++
+		c.stats.misses.Add(1)
 		var zero V
 		return zero, false
 	}
-	c.stats.Hits++
+
+	c.stats.hits.Add(1)
 
 	cvalue, ok := element.Value.(*container[K, V])
 
@@ -74,7 +76,7 @@ func (c *cache[K, V]) Put(key K, value V) {
 		}
 		// first delete from map
 		// then delete from linked list
-		c.stats.Evictions++
+		c.stats.evictions.Add(1)
 		delete(c.m, val.key)
 		c.orderList.Remove(c.orderList.Back())
 	}
@@ -105,17 +107,15 @@ func (c *cache[K, V]) Delete(key K) {
 	c.orderList.Remove(val)
 }
 
-func (c *cache[K, V]) Stats() Stats {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
-	return c.stats
+func (c *cache[K, V]) Stats() (hits uint64, misses uint64, evictions uint64) {
+	return c.stats.hits.Load(), c.stats.misses.Load(), c.stats.evictions.Load()
 }
 
 func (c *cache[K, V]) Clear() {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	c.stats = Stats{}
+	c.stats = stats{}
 	clear(c.m)
 	c.orderList.Init()
 }
@@ -129,6 +129,6 @@ func New[K comparable, V any](capacity uint) (*cache[K, V], error) {
 		orderList: list.New(),
 		m:         make(map[K]*list.Element, capacity),
 
-		stats: Stats{},
+		stats: stats{},
 	}, nil
 }
